@@ -15,7 +15,7 @@
     "check": "pnpm format:check && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
-    "prettier": "3.4.2",
-    "typescript": "5.6.3"
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
   }
 }
