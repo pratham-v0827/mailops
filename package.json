@@ -1,0 +1,21 @@
+{
+  "name": "mailops",
+  "private": true,
+  "description": "Open-source Gmail automation: rules-based labelling and lifecycle (archive / trash / keep) with a web dashboard and an MCP server.",
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "check": "pnpm format:check && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "prettier": "3.4.2",
+    "typescript": "5.6.3"
+  }
+}

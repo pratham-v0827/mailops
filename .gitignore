@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.next/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+
+# Credentials: never commit
+.env
+.env.*
+!.env.example
+.clasprc.json
+*service-account*.json
+*.pem
+
+# Firebase emulator data
+.firebase/
+firebase-debug.log
+firestore-debug.log
