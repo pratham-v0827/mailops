@@ -2,10 +2,16 @@ import {
   canonicalEmail,
   ConnectorToken,
   Settings,
+  type CommandPayload,
+  type CommandResult,
+  type EngineEvent,
   type EngineHeartbeat,
   type EngineRunReport,
+  type MirroredFilter,
+  type MirroredLabel,
   type Rule,
 } from '@mailops/schema';
+import { ENGINE_LATEST_VERSION } from './version';
 import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
 import { adminDb } from './firebase-admin';
 import { HttpError } from './http';
@@ -133,6 +139,7 @@ export async function recordHeartbeat(ctx: EngineContext, hb: EngineHeartbeat) {
       ...(hb.automationEnabled !== undefined
         ? { reportedAutomationEnabled: hb.automationEnabled }
         : {}),
+      ...(hb.state ? { state: hb.state } : {}),
     },
     { merge: true },
   );
@@ -145,9 +152,7 @@ export async function recordHeartbeat(ctx: EngineContext, hb: EngineHeartbeat) {
  * the same runId updates the run but doesn't count it twice.
  */
 export async function recordRun(ctx: EngineContext, run: EngineRunReport) {
-  if (!ctx.connected) {
-    throw new HttpError(403, 'Mailbox not verified yet; the engine must send a heartbeat first');
-  }
+  requireConnected(ctx);
   const day = run.endedAt.slice(0, 10);
   const runRef = ctx.mailbox.collection('runs').doc(run.runId);
   const duplicate = await adminDb().runTransaction(async (tx) => {
@@ -185,22 +190,139 @@ export async function recordRun(ctx: EngineContext, run: EngineRunReport) {
   return { ok: true, duplicate };
 }
 
-/** Configuration the engine pulls: settings and rules for its mailbox. */
+/**
+ * Configuration the engine pulls on every sync: settings and rules for its mailbox. Each rule
+ * carries `changedAt` so the engine can preview recently changed rules before acting on them.
+ */
 export async function engineConfig(ctx: EngineContext) {
-  const [snap, rules] = await Promise.all([
+  const [snap, rules, queued] = await Promise.all([
     ctx.mailbox.get(),
     ctx.mailbox.collection('rules').orderBy('label').get(),
+    ctx.mailbox.collection('commands').where('status', 'in', ['queued', 'sent']).count().get(),
   ]);
   return {
     mailboxId: ctx.mailbox.id,
     email: ctx.email,
     settings: Settings.parse(snap.get('settings') ?? {}),
     rules: rules.docs.map((d) => {
-      const { updatedAt: _u, updatedBy: _b, ...rule } = d.data();
-      return rule as Rule;
+      const { updatedAt, updatedBy: _b, ...rule } = d.data();
+      return { ...(rule as Rule), changedAt: iso(updatedAt) };
     }),
+    pendingCommands: queued.data().count,
+    latestEngineVersion: ENGINE_LATEST_VERSION,
     serverTime: new Date().toISOString(),
   };
+}
+
+/** Commands not acknowledged within this time are handed out again (all kinds are idempotent). */
+const COMMAND_RESEND_MS = 30 * 60 * 1000;
+
+/** Hands the engine its queued commands (oldest first) and marks them sent. */
+export async function takeCommands(ctx: EngineContext) {
+  requireConnected(ctx);
+  const col = ctx.mailbox.collection('commands');
+  const [queued, sent] = await Promise.all([
+    col.where('status', '==', 'queued').orderBy('createdAt').limit(20).get(),
+    col.where('status', '==', 'sent').orderBy('createdAt').limit(20).get(),
+  ]);
+  const stale = sent.docs.filter(
+    (d) =>
+      Date.now() - ((d.get('sentAt') as { toMillis?: () => number })?.toMillis?.() ?? 0) >
+      COMMAND_RESEND_MS,
+  );
+  const docs = [...queued.docs, ...stale].slice(0, 20);
+  if (docs.length) {
+    const batch = adminDb().batch();
+    for (const d of docs)
+      batch.update(d.ref, { status: 'sent', sentAt: FieldValue.serverTimestamp() });
+    await batch.commit();
+  }
+  return {
+    commands: docs.map((d) => ({ id: d.id, payload: d.get('payload') as CommandPayload })),
+  };
+}
+
+/** The engine reports a command's result; a linked proposal is marked applied or failed. */
+export async function completeCommand(ctx: EngineContext, id: string, result: CommandResult) {
+  requireConnected(ctx);
+  if (!/^[A-Za-z0-9]{1,40}$/.test(id)) throw new HttpError(404, 'Command not found');
+  const ref = ctx.mailbox.collection('commands').doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpError(404, 'Command not found');
+  const batch = adminDb().batch();
+  batch.update(ref, {
+    status: result.ok ? 'done' : 'failed',
+    result,
+    completedAt: FieldValue.serverTimestamp(),
+  });
+  const proposalId = snap.get('proposalId') as string | undefined;
+  if (proposalId) {
+    batch.update(ctx.mailbox.collection('proposals').doc(proposalId), {
+      status: result.ok ? 'applied' : 'failed',
+      result,
+    });
+  }
+  await batch.commit();
+  return { ok: true };
+}
+
+function requireConnected(ctx: EngineContext) {
+  if (!ctx.connected) {
+    throw new HttpError(403, 'Mailbox not verified yet; the engine must send a heartbeat first');
+  }
+}
+
+/**
+ * Stores audit events. Subjects are dropped unless the mailbox opted in; each event expires after
+ * the mailbox's retention period (Firestore TTL on `expireAt`). Ids are deterministic, so a
+ * re-sent batch doesn't create duplicates.
+ */
+export async function recordEvents(ctx: EngineContext, events: EngineEvent[]) {
+  requireConnected(ctx);
+  const settings = Settings.parse((await ctx.mailbox.get()).get('settings') ?? {});
+  const ttl = settings.retentionDays * 86_400_000;
+  const col = ctx.mailbox.collection('events');
+  const batch = adminDb().batch();
+  for (const e of events) {
+    const { subject, ...rest } = e;
+    batch.set(col.doc(`${e.runId}_${e.messageId}_${e.action}`), {
+      ...rest,
+      ...(settings.storeSubjects && subject ? { subject } : {}),
+      expireAt: new Date(new Date(e.at).getTime() + ttl),
+    });
+  }
+  await batch.commit();
+  return { ok: true, stored: events.length };
+}
+
+export async function mirrorLabels(ctx: EngineContext, labels: MirroredLabel[]) {
+  requireConnected(ctx);
+  await ctx.mailbox
+    .collection('mirror')
+    .doc('labels')
+    .set({ labels, updatedAt: FieldValue.serverTimestamp() });
+  return { ok: true, labels: labels.length };
+}
+
+/** Merges filter entries (or replaces the list when `complete`), keeping earlier health data. */
+export async function mirrorFilters(
+  ctx: EngineContext,
+  filters: MirroredFilter[],
+  complete: boolean,
+) {
+  requireConnected(ctx);
+  const ref = ctx.mailbox.collection('mirror').doc('filters');
+  await adminDb().runTransaction(async (tx) => {
+    const prev = ((await tx.get(ref)).get('filters') as MirroredFilter[] | undefined) ?? [];
+    const byId = new Map(prev.map((f) => [f.id, f]));
+    const next = new Map(complete ? [] : byId);
+    for (const f of filters) next.set(f.id, { ...f, health: f.health ?? byId.get(f.id)?.health });
+    tx.set(ref, {
+      filters: [...next.values()].map((f) => JSON.parse(JSON.stringify(f))),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  return { ok: true, filters: filters.length };
 }
 
 export type RunView = EngineRunReport & { receivedAt: string | null };

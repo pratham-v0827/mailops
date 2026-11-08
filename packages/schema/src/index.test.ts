@@ -160,3 +160,88 @@ describe('Proposal', () => {
     expect(res.success).toBe(false);
   });
 });
+
+describe('commands and proposals', () => {
+  it('maps proposals to engine commands', async () => {
+    const { commandForProposal } = await import('./index');
+    expect(commandForProposal({ kind: 'dryrun.request' })).toEqual({
+      kind: 'run.start',
+      mode: 'dry',
+    });
+    expect(commandForProposal({ kind: 'label.create', label: 'A/B' })).toEqual({
+      kind: 'label.create',
+      label: 'A/B',
+    });
+    expect(
+      commandForProposal({ kind: 'rule.upsert', rule: Rule.parse({ label: 'A' }) }),
+    ).toBeNull();
+  });
+
+  it('describes proposals', async () => {
+    const { describeProposal } = await import('./index');
+    expect(
+      describeProposal({
+        kind: 'rule.upsert',
+        rule: Rule.parse({ label: 'News', archiveAfterDays: 7, trashAfterDays: 30 }),
+      }),
+    ).toBe('Rule News: archive after 7 d, trash after 30 d');
+  });
+
+  it('rejects unknown command kinds', async () => {
+    const { CommandPayload } = await import('./index');
+    expect(CommandPayload.safeParse({ kind: 'mail.delete' }).success).toBe(false);
+    expect(CommandPayload.safeParse({ kind: 'run.start', mode: 'prod' }).success).toBe(true);
+  });
+});
+
+describe('EngineEvent', () => {
+  const base = {
+    messageId: '1a168f266cabf6ce',
+    threadId: '1a168f266cabf6ce',
+    at: '2026-11-08T03:00:00.000Z',
+    runId: '20261108-030000-abcd1234',
+    mode: 'dry',
+    action: 'archive',
+    preview: true,
+    label: 'Newsletters',
+    ageDays: 9,
+  };
+  it('accepts a minimal event and defaults optional fields', async () => {
+    const { EngineEvent } = await import('./index');
+    const e = EngineEvent.parse(base);
+    expect(e.senderDomain).toBe('');
+    expect(e.subject).toBeUndefined();
+  });
+  it('caps batches at 500', async () => {
+    const { EngineEventBatch } = await import('./index');
+    expect(EngineEventBatch.safeParse({ events: Array(501).fill(base) }).success).toBe(false);
+  });
+});
+
+describe('PairCode', () => {
+  it('normalises case and the dash', async () => {
+    const { PairCode, formatPairCode } = await import('./index');
+    expect(PairCode.parse('abcd-efgh')).toBe('ABCDEFGH');
+    expect(PairCode.safeParse('ABCD-EFG0').success).toBe(false); // 0 is not in the alphabet
+    expect(formatPairCode('ABCDEFGH')).toBe('ABCD-EFGH');
+  });
+});
+
+describe('Settings defaults', () => {
+  it('keeps the safe defaults', () => {
+    const s = Settings.parse({});
+    expect(s.dryRun).toBe(true);
+    expect(s.automationEnabled).toBe(false);
+    expect(s.maxTrashPerPass).toBe(250);
+    expect(s.newRulePreviewHours).toBe(24);
+  });
+});
+
+describe('SettingsPatch', () => {
+  it('does not fill in defaults for missing fields', async () => {
+    const { SettingsPatch } = await import('./index');
+    expect(SettingsPatch.parse({ dryRun: false })).toEqual({ dryRun: false });
+    expect(SettingsPatch.safeParse({ bogus: 1 }).success).toBe(false);
+    expect(SettingsPatch.safeParse({ dailyHour: 25 }).success).toBe(false);
+  });
+});

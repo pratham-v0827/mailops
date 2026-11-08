@@ -52,7 +52,11 @@ export const Rule = z
   });
 export type Rule = z.infer<typeof Rule>;
 
-/** Per-mailbox settings. Safe defaults: automation off, dry run on, global guards on. */
+/**
+ * Per-mailbox settings. Safe defaults: automation off, dry run on, global guards on.
+ * The engine enforces the guards itself; the dashboard cannot switch them off remotely without
+ * the user changing them here.
+ */
 export const Settings = z.object({
   automationEnabled: z.boolean().default(false),
   dryRun: z.boolean().default(true),
@@ -62,9 +66,37 @@ export const Settings = z.object({
   storeSubjects: z.boolean().default(false),
   retentionDays: z.number().int().min(7).max(365).default(90),
   staleAfterHours: z.number().int().min(1).max(168).default(26),
-  timezone: z.string().min(1).default('UTC'),
+  timezone: z.string().min(1).max(60).default('UTC'),
+  /** Hour (0–23, in `timezone`) of the nightly lifecycle pass. */
+  dailyHour: z.number().int().min(0).max(23).default(3),
+  /** Per-batch limits (Apps Script allows 6 minutes per execution). */
+  maxMessagesPerBatch: z.number().int().min(10).max(150).default(100),
+  maxRuntimeSeconds: z.number().int().min(60).max(300).default(210),
+  /** Production passes move at most this many messages to Trash; the rest are previewed only. */
+  maxTrashPerPass: z.number().int().min(0).max(5000).default(250),
+  /** A rule changed in the last N hours runs as a preview even in production. 0 = off. */
+  newRulePreviewHours: z.number().int().min(0).max(168).default(24),
+  /** The engine emails the account owner when a run fails or the nightly pass is overdue. */
+  emailAlerts: z.boolean().default(true),
 });
 export type Settings = z.infer<typeof Settings>;
+
+/**
+ * A partial settings change. Unlike `Settings.partial()`, missing fields stay missing (zod would
+ * otherwise fill in defaults and silently reset them).
+ */
+export const SettingsPatch = z
+  .object(
+    Object.fromEntries(
+      Object.entries(Settings.shape).map(([k, v]) => [k, v.unwrap().optional()]),
+    ) as {
+      [K in keyof typeof Settings.shape]: z.ZodOptional<
+        ReturnType<(typeof Settings.shape)[K]['unwrap']>
+      >;
+    },
+  )
+  .strict();
+export type SettingsPatch = z.infer<typeof SettingsPatch>;
 
 /**
  * One Gmail address managed by a MailOps user. A user can have several, each with its own rules,
@@ -101,10 +133,41 @@ export type FilterCriteria = z.infer<typeof FilterCriteria>;
 export const ProposalPayload = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('rule.upsert'), rule: Rule }),
   z.object({ kind: z.literal('label.create'), label: LabelName }),
-  z.object({ kind: z.literal('filter.create'), criteria: FilterCriteria, addLabel: LabelName }),
+  z.object({
+    kind: z.literal('filter.create'),
+    criteria: FilterCriteria,
+    addLabel: LabelName,
+    /** Also skip the inbox (Gmail "Skip the Inbox (Archive it)"). */
+    archive: z.boolean().default(false),
+  }),
   z.object({ kind: z.literal('dryrun.request'), labels: z.array(LabelName).optional() }),
 ]);
 export type ProposalPayload = z.infer<typeof ProposalPayload>;
+
+/** Short human-readable description of a proposal, for lists and notifications. */
+export function describeProposal(p: ProposalPayload): string {
+  switch (p.kind) {
+    case 'rule.upsert': {
+      const r = p.rule;
+      const parts = [
+        r.enabled ? null : 'disabled',
+        r.archiveAfterDays === null ? null : `archive after ${r.archiveAfterDays} d`,
+        r.neverDelete
+          ? 'never delete'
+          : r.trashAfterDays === null
+            ? null
+            : `trash after ${r.trashAfterDays} d`,
+      ].filter(Boolean);
+      return `Rule ${r.label}: ${parts.join(', ') || 'keep'}`;
+    }
+    case 'label.create':
+      return `Create label ${p.label}`;
+    case 'filter.create':
+      return `Create filter → ${p.addLabel}`;
+    case 'dryrun.request':
+      return 'Run a dry run';
+  }
+}
 
 export const ProposalStatus = z.enum(['pending', 'approved', 'rejected', 'applied', 'failed']);
 export const ProposalSource = z.enum(['web', 'mcp']);
@@ -136,6 +199,7 @@ export const EngineHeartbeat = z.object({
   gmailAddress: z.string().trim().toLowerCase().email(),
   mode: z.enum(['dry', 'prod']).optional(),
   automationEnabled: z.boolean().optional(),
+  state: z.lazy(() => EngineState).optional(),
 });
 export type EngineHeartbeat = z.infer<typeof EngineHeartbeat>;
 
@@ -189,3 +253,167 @@ export function canonicalEmail(email: string): string {
   }
   return `${local}@${domain}`;
 }
+
+// ---------------------------------------------------------------------------
+// Commands: work the engine carries out in Gmail (queued by the dashboard, or by approving a
+// proposal). Rule and settings changes don't need commands: the engine reads them on every sync.
+// ---------------------------------------------------------------------------
+
+export const CommandPayload = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('label.create'), label: LabelName }),
+  z.object({
+    kind: z.literal('filter.create'),
+    criteria: FilterCriteria,
+    addLabel: LabelName,
+    archive: z.boolean().default(false),
+  }),
+  /** Start a lifecycle pass now. `prod` is refused unless automation is on and dry run is off. */
+  z.object({ kind: z.literal('run.start'), mode: z.enum(['dry', 'prod']) }),
+  z.object({ kind: z.literal('run.stop') }),
+  /** Re-send the label and filter lists now instead of waiting for the daily refresh. */
+  z.object({ kind: z.literal('mirror.refresh') }),
+]);
+export type CommandPayload = z.infer<typeof CommandPayload>;
+
+export const CommandStatus = z.enum(['queued', 'sent', 'done', 'failed']);
+export type CommandStatus = z.infer<typeof CommandStatus>;
+
+export const CommandResult = z.object({
+  ok: z.boolean(),
+  message: z.string().max(1000).default(''),
+});
+export type CommandResult = z.infer<typeof CommandResult>;
+
+/** Maps an approved proposal to the engine command it needs (null: applied on the server). */
+export function commandForProposal(p: ProposalPayload): CommandPayload | null {
+  switch (p.kind) {
+    case 'rule.upsert':
+      return null;
+    case 'label.create':
+      return { kind: 'label.create', label: p.label };
+    case 'filter.create':
+      return {
+        kind: 'filter.create',
+        criteria: p.criteria,
+        addLabel: p.addLabel,
+        archive: p.archive,
+      };
+    case 'dryrun.request':
+      return { kind: 'run.start', mode: 'dry' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Engine → API: audit events and Gmail mirrors
+// ---------------------------------------------------------------------------
+
+export const EventAction = z.enum(['archive', 'trash', 'protect']);
+export type EventAction = z.infer<typeof EventAction>;
+
+const GmailId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+
+/**
+ * One lifecycle decision about one message. No body is ever sent; the subject only when the
+ * mailbox opts in (settings.storeSubjects).
+ */
+export const EngineEvent = z.object({
+  messageId: GmailId,
+  threadId: GmailId,
+  at: z.iso.datetime({ offset: true }),
+  runId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
+  mode: z.enum(['dry', 'prod']),
+  action: EventAction,
+  /** True when nothing was changed (dry run, new-rule preview, or the trash limit). */
+  preview: z.boolean(),
+  label: LabelName,
+  reason: z.string().max(200).default(''),
+  ageDays: z.number().int().min(0).max(36500),
+  senderDomain: z.string().max(253).default(''),
+  subject: z.string().max(200).optional(),
+});
+export type EngineEvent = z.infer<typeof EngineEvent>;
+
+export const EngineEventBatch = z.object({ events: z.array(EngineEvent).min(1).max(500) });
+
+export const MirroredLabel = z.object({
+  id: z.string().min(1).max(100),
+  name: z.string().min(1).max(225),
+  type: z.enum(['system', 'user']),
+  messagesTotal: z.number().int().min(0).optional(),
+  messagesUnread: z.number().int().min(0).optional(),
+});
+export type MirroredLabel = z.infer<typeof MirroredLabel>;
+
+export const LabelMirror = z.object({ labels: z.array(MirroredLabel).max(2000) });
+
+export const MirroredFilter = z.object({
+  id: z.string().min(1).max(200),
+  criteria: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  addLabels: z.array(z.string().max(225)).max(20).default([]),
+  removeLabels: z.array(z.string().max(225)).max(20).default([]),
+  forward: z.string().max(254).optional(),
+  /** Messages in the last 30 days matching the criteria, and how many of those carry the label. */
+  health: z
+    .object({
+      matched30d: z.number().int().min(0),
+      labelled30d: z.number().int().min(0),
+      checkedAt: z.iso.datetime({ offset: true }),
+    })
+    .optional(),
+});
+export type MirroredFilter = z.infer<typeof MirroredFilter>;
+
+/** `complete` replaces the whole list (removed filters disappear); otherwise entries are merged. */
+export const FilterMirror = z.object({
+  filters: z.array(MirroredFilter).max(1000),
+  complete: z.boolean().default(false),
+});
+
+/** Engine state sent with each heartbeat (all optional, for older engines). */
+export const EngineState = z.object({
+  sessionActive: z.boolean().optional(),
+  sessionMode: z.enum(['dry', 'prod']).optional(),
+  sessionId: z.string().max(80).optional(),
+  lastPassCompletedAt: z.iso.datetime({ offset: true }).optional(),
+  nightlyTriggerHour: z.number().int().min(0).max(23).nullable().optional(),
+  usingCachedConfig: z.boolean().optional(),
+});
+export type EngineState = z.infer<typeof EngineState>;
+
+// ---------------------------------------------------------------------------
+// Pairing: a new engine links itself to a mailbox without copying tokens around.
+// The engine shows a short code; the signed-in user approves it on the dashboard.
+// ---------------------------------------------------------------------------
+
+/** 8 characters from an alphabet without look-alikes, shown as XXXX-XXXX. */
+export const PAIR_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export const PairCode = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .transform((s) => s.replace(/[\s-]/g, ''))
+  .pipe(z.string().regex(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/, 'Not a pairing code'));
+
+export function formatPairCode(code: string): string {
+  return `${code.slice(0, 4)}-${code.slice(4, 8)}`;
+}
+
+export const PairStart = z.object({
+  /** Google OpenID token from ScriptApp.getIdentityToken(): proves the Gmail address. */
+  identityToken: z.string().min(20).max(4096),
+  engineVersion: z.string().trim().min(1).max(40),
+});
+export const PairPoll = z.object({ deviceCode: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
+
+// ---------------------------------------------------------------------------
+// MCP personal access tokens
+// ---------------------------------------------------------------------------
+
+export const MCP_TOKEN_PREFIX = 'mcp_';
+export const McpToken = z.string().regex(/^mcp_[A-Za-z0-9_-]{43}$/, 'Not a MailOps MCP token');
+export const McpScope = z.enum(['read', 'propose']);
+export type McpScope = z.infer<typeof McpScope>;
+export const NewMcpToken = z.object({
+  name: z.string().trim().min(1).max(60),
+  scopes: z.array(McpScope).min(1).default(['read', 'propose']),
+});
