@@ -22,6 +22,9 @@ const MAILOPS_CONNECTOR = {
 };
 
 function mailopsConnectDashboard() {
+  // With granular consent a user can hold an older grant without the web-request scope; this
+  // ends the run and shows Google's authorization prompt for it instead of failing later.
+  mailopsRequireFetchScope_();
   const ui = SpreadsheetApp.getUi();
   const res = ui.prompt(
     'Connect to MailOps dashboard',
@@ -58,6 +61,14 @@ function mailopsConnectDashboard() {
 function mailopsDisconnectDashboard() {
   PropertiesService.getScriptProperties().deleteProperty(MAILOPS_CONNECTOR.PROP_TOKEN);
   return 'Disconnected from MailOps dashboard (token removed from this script).';
+}
+
+function mailopsRequireFetchScope_() {
+  if (typeof ScriptApp.requireScopes === 'function') {
+    ScriptApp.requireScopes(ScriptApp.AuthMode.FULL, [
+      'https://www.googleapis.com/auth/script.external_request',
+    ]);
+  }
 }
 
 function mailopsIsConnected_() {
