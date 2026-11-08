@@ -4,16 +4,20 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { AddMailbox } from '../../components/AddMailbox';
 import { AppShell, Card, ErrorNote } from '../../components/AppShell';
+import { ConnectEngine } from '../../components/ConnectEngine';
+import { RecentRuns } from '../../components/RecentRuns';
 import { mailboxLabel, useMailboxes } from '../../components/MailboxProvider';
 import type { MailboxView } from '../../lib/api-types';
 
 function engineStatus(m: MailboxView) {
   const e = m.engine;
-  if (!e?.lastSeenAt) {
+  if (!m.connected || !e?.lastSeenAt) {
     return {
       label: 'Not connected',
       tone: 'warn' as const,
-      note: 'Connect this Gmail account’s Apps Script engine (coming in M3).',
+      note: m.hasConnector
+        ? 'Token created; waiting for the engine to check in.'
+        : 'Connect this Gmail account’s Apps Script engine below.',
     };
   }
   const hours = (Date.now() - new Date(e.lastSeenAt).getTime()) / 36e5;
@@ -27,7 +31,24 @@ function engineStatus(m: MailboxView) {
   return {
     label: 'Healthy',
     tone: 'good' as const,
-    note: `Last seen ${new Date(e.lastSeenAt).toLocaleString()}.`,
+    note: `Last seen ${new Date(e.lastSeenAt).toLocaleString()}${e.engineVersion ? ` · v${e.engineVersion}` : ''}.`,
+  };
+}
+
+/** Prefer what the engine reports; fall back to the dashboard's own setting. */
+function modeOf(m: MailboxView) {
+  const e = m.engine;
+  if (e?.reportedMode) {
+    return {
+      dry: e.reportedMode === 'dry',
+      automation: e.reportedAutomationEnabled ?? m.settings.automationEnabled,
+      source: 'reported by the engine',
+    };
+  }
+  return {
+    dry: m.settings.dryRun,
+    automation: m.settings.automationEnabled,
+    source: 'dashboard default',
   };
 }
 
@@ -63,6 +84,7 @@ function Overview() {
 
   const m = selected ?? mailboxes[0]!;
   const engine = engineStatus(m);
+  const mode = modeOf(m);
   const s = m.settings;
 
   return (
@@ -77,10 +99,10 @@ function Overview() {
           <p className="text-xl font-semibold">{engine.label}</p>
           <p className="mt-1 text-xs text-slate-500">{engine.note}</p>
         </Card>
-        <Card title="Mode" tone={s.dryRun ? 'warn' : 'good'}>
-          <p className="text-xl font-semibold">{s.dryRun ? 'Dry run' : 'Production'}</p>
+        <Card title="Mode" tone={mode.dry ? 'warn' : 'good'}>
+          <p className="text-xl font-semibold">{mode.dry ? 'Dry run' : 'Production'}</p>
           <p className="mt-1 text-xs text-slate-500">
-            Automation {s.automationEnabled ? 'enabled' : 'disabled'}
+            Automation {mode.automation ? 'enabled' : 'disabled'} · {mode.source}
           </p>
         </Card>
         <Card title="Rules">
@@ -108,6 +130,17 @@ function Overview() {
         </p>
       </Card>
 
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card title="Engine connection" tone={m.connected ? 'good' : 'warn'}>
+          <ConnectEngine key={m.id} mailbox={m} />
+        </Card>
+        <div className="lg:col-span-2">
+          <Card title="Recent runs">
+            <RecentRuns key={m.id} mailboxId={m.id} />
+          </Card>
+        </div>
+      </div>
+
       <Card title={`All mailboxes (${mailboxes.length})`}>
         <table className="w-full text-left text-sm">
           <thead className="text-xs uppercase tracking-wide text-slate-500">
@@ -130,7 +163,7 @@ function Overview() {
               >
                 <td className="py-2">{mailboxLabel(x)}</td>
                 <td className="py-2">{engineStatus(x).label}</td>
-                <td className="py-2">{x.settings.dryRun ? 'Dry run' : 'Production'}</td>
+                <td className="py-2">{modeOf(x).dry ? 'Dry run' : 'Production'}</td>
                 <td className="py-2">{x.ruleCount}</td>
                 <td className="py-2">{x.pendingProposals}</td>
               </tr>

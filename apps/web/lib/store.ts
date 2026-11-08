@@ -30,6 +30,7 @@ export type MailboxSummary = {
   email: string;
   displayName: string;
   connected: boolean;
+  hasConnector: boolean;
   settings: Settings;
   ruleCount: number;
   pendingProposals: number;
@@ -37,6 +38,9 @@ export type MailboxSummary = {
     lastSeenAt: string | null;
     lastRunAt: string | null;
     lastRunStatus: string | null;
+    lastRunMode: 'dry' | 'prod' | null;
+    reportedMode: 'dry' | 'prod' | null;
+    reportedAutomationEnabled: boolean | null;
     engineVersion: string | null;
   } | null;
 };
@@ -55,6 +59,7 @@ async function summarise(ref: DocumentReference): Promise<MailboxSummary> {
     email: String(d.email ?? ''),
     displayName: String(d.displayName ?? ''),
     connected: Boolean(d.connected),
+    hasConnector: Boolean(d.connectorTokenHash),
     settings: Settings.parse(d.settings ?? {}),
     ruleCount: rules.data().count,
     pendingProposals: pending.data().count,
@@ -63,6 +68,10 @@ async function summarise(ref: DocumentReference): Promise<MailboxSummary> {
           lastSeenAt: iso(h.lastSeenAt),
           lastRunAt: iso(h.lastRunAt),
           lastRunStatus: (h.lastRunStatus as string) ?? null,
+          lastRunMode: (h.lastRunMode as 'dry' | 'prod') ?? null,
+          reportedMode: (h.reportedMode as 'dry' | 'prod') ?? null,
+          reportedAutomationEnabled:
+            typeof h.reportedAutomationEnabled === 'boolean' ? h.reportedAutomationEnabled : null,
           engineVersion: (h.engineVersion as string) ?? null,
         }
       : null,

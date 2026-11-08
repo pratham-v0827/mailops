@@ -1,5 +1,77 @@
 import { describe, expect, it } from 'vitest';
-import { FilterCriteria, LabelName, NewMailbox, Proposal, Rule, Settings } from './index';
+import {
+  canonicalEmail,
+  ConnectorToken,
+  EngineHeartbeat,
+  EngineRunReport,
+  FilterCriteria,
+  LabelName,
+  NewMailbox,
+  Proposal,
+  Rule,
+  Settings,
+} from './index';
+
+describe('canonicalEmail', () => {
+  it('ignores dots and +tags for Gmail, and case everywhere', () => {
+    expect(canonicalEmail('A.B.C+news@Gmail.com')).toBe('abc@gmail.com');
+    expect(canonicalEmail('abc@googlemail.com')).toBe('abc@gmail.com');
+  });
+
+  it('keeps dots for other domains', () => {
+    expect(canonicalEmail('First.Last@Example.com')).toBe('first.last@example.com');
+  });
+});
+
+describe('ConnectorToken', () => {
+  it('accepts the mops_ format and rejects anything else', () => {
+    expect(ConnectorToken.safeParse('mops_' + 'a'.repeat(43)).success).toBe(true);
+    expect(ConnectorToken.safeParse('mops_short').success).toBe(false);
+    expect(ConnectorToken.safeParse('Bearer xyz').success).toBe(false);
+  });
+});
+
+describe('EngineHeartbeat', () => {
+  it('normalises the Gmail address', () => {
+    expect(
+      EngineHeartbeat.parse({ engineVersion: '2.6.0', gmailAddress: ' Me@Example.com ' })
+        .gmailAddress,
+    ).toBe('me@example.com');
+  });
+});
+
+describe('EngineRunReport', () => {
+  const base = {
+    runId: '20261108-030000-ab12cd34',
+    startedAt: '2026-11-08T03:00:00.000Z',
+    endedAt: '2026-11-08T03:01:10.000Z',
+    mode: 'prod',
+    status: 'SUCCESS',
+    scanned: 20,
+    archived: 12,
+    trashed: 4,
+    protected: 1,
+    skipped: 3,
+    errors: 0,
+    engineVersion: '2.6.0',
+  };
+
+  it('accepts a valid report and fills defaults', () => {
+    expect(EngineRunReport.parse(base)).toMatchObject({
+      sessionId: '',
+      notes: '',
+      triggerType: '',
+    });
+  });
+
+  it('rejects negative counts, bad ids and time travel', () => {
+    expect(EngineRunReport.safeParse({ ...base, trashed: -1 }).success).toBe(false);
+    expect(EngineRunReport.safeParse({ ...base, runId: '../etc' }).success).toBe(false);
+    expect(
+      EngineRunReport.safeParse({ ...base, endedAt: '2026-11-08T02:00:00.000Z' }).success,
+    ).toBe(false);
+  });
+});
 
 describe('NewMailbox', () => {
   it('normalises the email and defaults the name', () => {

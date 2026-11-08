@@ -116,3 +116,76 @@ export const Proposal = z.object({
   reason: z.string().max(1000).default(''),
 });
 export type Proposal = z.infer<typeof Proposal>;
+
+// ---------------------------------------------------------------------------
+// Engine ↔ API (the Apps Script engine authenticates with a per-mailbox connector token)
+// ---------------------------------------------------------------------------
+
+/** Connector tokens look like `mops_` + 43 base64url chars (32 random bytes). */
+export const CONNECTOR_TOKEN_PREFIX = 'mops_';
+export const ConnectorToken = z
+  .string()
+  .regex(/^mops_[A-Za-z0-9_-]{43}$/, 'Not a MailOps connector token');
+
+const EngineVersion = z.string().trim().min(1).max(40);
+const Count = z.number().int().min(0).max(1_000_000);
+
+/** Sent by the engine on connect and around every run. Proves which Gmail account it runs in. */
+export const EngineHeartbeat = z.object({
+  engineVersion: EngineVersion,
+  gmailAddress: z.string().trim().toLowerCase().email(),
+  mode: z.enum(['dry', 'prod']).optional(),
+  automationEnabled: z.boolean().optional(),
+});
+export type EngineHeartbeat = z.infer<typeof EngineHeartbeat>;
+
+export const EngineRunStatus = z.enum([
+  'SUCCESS',
+  'PARTIAL SUCCESS',
+  'CONTINUING',
+  'PAUSED',
+  'FAILED',
+  'SKIPPED',
+]);
+
+/** One engine execution (one batch of a nightly pass or dry run). Counts only, no email content. */
+export const EngineRunReport = z
+  .object({
+    runId: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
+    sessionId: z.string().max(80).default(''),
+    startedAt: z.iso.datetime({ offset: true }),
+    endedAt: z.iso.datetime({ offset: true }),
+    mode: z.enum(['dry', 'prod']),
+    status: EngineRunStatus,
+    scanned: Count,
+    archived: Count,
+    trashed: Count,
+    protected: Count,
+    skipped: Count,
+    errors: Count,
+    triggerType: z.string().max(60).default(''),
+    engineVersion: EngineVersion,
+    notes: z.string().max(1000).default(''),
+  })
+  .refine((r) => new Date(r.endedAt) >= new Date(r.startedAt), {
+    message: 'endedAt is before startedAt',
+    path: ['endedAt'],
+  });
+export type EngineRunReport = z.infer<typeof EngineRunReport>;
+
+/**
+ * Canonical form for comparing Gmail addresses: lowercase; for gmail.com/googlemail.com also drop
+ * dots and "+tags" in the local part (Gmail ignores both, so a.b@gmail.com is ab@gmail.com).
+ */
+export function canonicalEmail(email: string): string {
+  const e = email.trim().toLowerCase();
+  const at = e.lastIndexOf('@');
+  if (at < 0) return e;
+  let local = e.slice(0, at);
+  let domain = e.slice(at + 1);
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    local = local.split('+')[0]!.replace(/\./g, '');
+    domain = 'gmail.com';
+  }
+  return `${local}@${domain}`;
+}
