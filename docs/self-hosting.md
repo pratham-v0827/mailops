@@ -39,7 +39,16 @@ The CLI can't do these two; use the console:
    | `FIREBASE_SERVICE_ACCOUNT_JSON`    | the whole service-account JSON, pasted as one value           |
    | `ALLOWED_EMAILS`                   | your Google email(s), comma-separated. Only these can sign in |
 
-4. **Deploy.** You get a URL like `https://mailops-xxxx.vercel.app`.
+   **Or with the CLI**, from the repo root, which handles the key without pasting it anywhere:
+
+   ```powershell
+   npx vercel login
+   npx vercel link --yes --project mailops            # creates the project and connects the GitHub repo
+   npx vercel project update mailops --root-directory apps/web --framework nextjs --node-version 22.x --yes
+   .\scripts\set-vercel-env.ps1 -ServiceAccountJson <path-to-key.json> -AllowedEmails you@gmail.com
+   ```
+
+4. **Deploy.** Push to `main`, or run `npx vercel deploy --prod`. You get a URL like `https://mailops-xxxx.vercel.app`.
 
 ## 3. Allow sign-in from your Vercel domain
 
