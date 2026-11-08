@@ -10,7 +10,9 @@ const Body = z.object({ payload: ProposalPayload, reason: z.string().max(1000).d
 
 export const GET = handle(async (request: Request, ctx: MailboxParams) => {
   const { mailbox } = await mailboxContext(request, ctx);
-  return { proposals: await listProposals(mailbox, 'pending') };
+  const status =
+    new URL(request.url).searchParams.get('status') === 'decided' ? 'decided' : 'pending';
+  return { proposals: await listProposals(mailbox, status) };
 });
 
 export const POST = handle(async (request: Request, ctx: MailboxParams) => {

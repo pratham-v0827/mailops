@@ -273,9 +273,10 @@ function requireConnected(ctx: EngineContext) {
 }
 
 /**
- * Stores audit events. Subjects are dropped unless the mailbox opted in; each event expires after
- * the mailbox's retention period (Firestore TTL on `expireAt`). Ids are deterministic, so a
- * re-sent batch doesn't create duplicates.
+ * Stores audit events. Subjects are dropped unless the mailbox opted in. Each event carries
+ * `expireAt` (now + the mailbox's retention period) and expired events are pruned here about once
+ * a day, which works on Firebase's free plan (TTL policies need billing). Ids are deterministic,
+ * so a re-sent batch doesn't create duplicates.
  */
 export async function recordEvents(ctx: EngineContext, events: EngineEvent[]) {
   requireConnected(ctx);
@@ -292,7 +293,33 @@ export async function recordEvents(ctx: EngineContext, events: EngineEvent[]) {
     });
   }
   await batch.commit();
-  return { ok: true, stored: events.length };
+  const pruned = await pruneExpiredEvents(ctx.mailbox);
+  return { ok: true, stored: events.length, pruned };
+}
+
+const PRUNE_EVERY_MS = 20 * 3600 * 1000;
+
+/** Deletes up to 1,000 expired events, at most once every 20 hours per mailbox. */
+export async function pruneExpiredEvents(mailbox: DocumentReference): Promise<number> {
+  const snap = await mailbox.get();
+  const last =
+    (snap.get('eventsPrunedAt') as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+  if (Date.now() - last < PRUNE_EVERY_MS) return 0;
+  await mailbox.update({ eventsPrunedAt: FieldValue.serverTimestamp() });
+  let total = 0;
+  for (let round = 0; round < 2; round++) {
+    const expired = await mailbox
+      .collection('events')
+      .where('expireAt', '<', new Date())
+      .limit(500)
+      .get();
+    if (expired.empty) break;
+    const batch = adminDb().batch();
+    expired.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    total += expired.size;
+  }
+  return total;
 }
 
 export async function mirrorLabels(ctx: EngineContext, labels: MirroredLabel[]) {

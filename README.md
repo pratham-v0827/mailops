@@ -4,7 +4,14 @@
 
 MailOps keeps Gmail tidy with simple per-label rules: _archive after N days_, _move to Trash after M days_, or _keep forever_. You manage everything from a clean web dashboard, or from **Claude**, through the MailOps MCP server.
 
-> **Status: early development.** The Gmail engine has run in production for a single user since Sept 2026. The multi-user web app is being built in the open. See the [roadmap](docs/roadmap.md).
+> **Status: beta.** The Gmail engine logic has run in production for one user since Sept 2026; engine v3 (no spreadsheet), the dashboard and the MCP server are new. See the [roadmap](docs/roadmap.md).
+
+## Get started
+
+1. Sign in to your MailOps dashboard (or [self-host one](docs/self-hosting.md)).
+2. Follow **Setup**: copy the engine into your Google account, run `setup`, approve the code. [Engine guide](engine/README.md).
+3. Add rules, start a dry run, check **Activity**, then turn on production in **Settings**.
+4. Optional: [connect Claude](docs/mcp.md).
 
 ## How it works
 
@@ -28,13 +35,13 @@ flowchart LR
 
 ## Repository
 
-| Path                                 | What                                                             |
-| ------------------------------------ | ---------------------------------------------------------------- |
-| [`apps/web`](apps/web)               | Next.js dashboard, API routes, MCP endpoint (Vercel)             |
-| [`engine`](engine)                   | Apps Script library that runs in each user's account             |
-| [`packages/schema`](packages/schema) | Shared zod schemas: rules, settings, proposals                   |
-| [`firebase`](firebase)               | Firestore security rules and indexes                             |
-| [`docs`](docs)                       | [Architecture](docs/architecture.md), [roadmap](docs/roadmap.md) |
+| Path                                 | What                                                                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| [`apps/web`](apps/web)               | Next.js dashboard, API routes, MCP endpoint (Vercel)                                                                       |
+| [`engine`](engine)                   | Apps Script engine that runs in each user's account (tested in Node)                                                       |
+| [`packages/schema`](packages/schema) | Shared zod schemas: rules, settings, proposals                                                                             |
+| [`firebase`](firebase)               | Firestore security rules and indexes                                                                                       |
+| [`docs`](docs)                       | [Architecture](docs/architecture.md), [MCP](docs/mcp.md), [self-hosting](docs/self-hosting.md), [roadmap](docs/roadmap.md) |
 
 ## Development
 

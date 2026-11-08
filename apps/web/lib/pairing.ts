@@ -24,7 +24,17 @@ function newUserCode(): string {
   return s;
 }
 
+/** Removes a few expired pairings (they hold no secrets once delivered or expired). */
+async function pruneExpiredPairings() {
+  const old = await pairings().where('expireAt', '<', Timestamp.now()).limit(20).get();
+  if (old.empty) return;
+  const batch = adminDb().batch();
+  old.docs.forEach((d) => batch.delete(d.ref));
+  await batch.commit();
+}
+
 export async function startPairing(email: string, engineVersion: string) {
+  await pruneExpiredPairings();
   const deviceCode = randomBytes(32).toString('base64url');
   const userCode = newUserCode();
   const expireAt = Timestamp.fromMillis(Date.now() + PAIR_TTL_MS);

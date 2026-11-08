@@ -151,6 +151,29 @@ describe('batches', () => {
   });
 });
 
+describe('robustness', () => {
+  it('retries a batch later when another execution holds the lock', () => {
+    const e = setupNews({ dryRun: true });
+    e.g.startSession_!('dry', 'TEST');
+    e.lockBusy.value = true;
+    expect(e.g.mailopsContinue!()).toContain('retrying');
+    expect(e.triggers.filter((t) => t.handler === 'mailopsContinue')).toHaveLength(1);
+    e.lockBusy.value = false;
+    e.g.mailopsContinue!();
+    expect(e.props.has('MAILOPS_SESSION')).toBe(false);
+  });
+
+  it('a failing sync step does not fail the sync or skip the others', () => {
+    const e = setupNews({ dryRun: true });
+    e.breakFilters();
+    e.api.commands = [{ id: 'c1', payload: { kind: 'label.create', label: 'X' } }];
+    const r = e.g.mailopsSync!();
+    expect(r).toContain('mirrors');
+    expect(e.api.commandResults.c1.ok).toBe(true);
+    expect(e.triggers.some((t) => t.handler === 'mailopsSync')).toBe(true);
+  });
+});
+
 describe('config', () => {
   it('drops invalid rules instead of guessing', () => {
     const e = makeEngine();

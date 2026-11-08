@@ -36,7 +36,18 @@ function mailopsContinue() {
 
 function runBatch_(cfg) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(5000)) return 'skipped: another run is active';
+  if (!lock.tryLock(5000)) {
+    // Another execution (usually the 15-minute sync) holds the lock: try again shortly so the
+    // pass doesn't stall.
+    if (getSession_()) {
+      removeTriggers_(MAILOPS.HANDLER.CONTINUE);
+      ScriptApp.newTrigger(MAILOPS.HANDLER.CONTINUE)
+        .timeBased()
+        .after(MAILOPS.CONTINUE_DELAY_MIN * 60 * 1000)
+        .create();
+    }
+    return 'skipped: another run is active; retrying shortly';
+  }
   const session = getSession_();
   if (!session) {
     lock.releaseLock();

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { AddMailbox } from '../../components/AddMailbox';
 import { AppShell, Card, ErrorNote } from '../../components/AppShell';
-import { ConnectEngine } from '../../components/ConnectEngine';
+import { EngineActions } from '../../components/EngineActions';
 import { RecentRuns } from '../../components/RecentRuns';
 import { mailboxLabel, useMailboxes } from '../../components/MailboxProvider';
 import type { MailboxView } from '../../lib/api-types';
@@ -17,7 +17,7 @@ function engineStatus(m: MailboxView) {
       tone: 'warn' as const,
       note: m.hasConnector
         ? 'Token created; waiting for the engine to check in.'
-        : 'Connect this Gmail account’s Apps Script engine below.',
+        : 'Install the engine for this Gmail account (Setup).',
     };
   }
   const hours = (Date.now() - new Date(e.lastSeenAt).getTime()) / 36e5;
@@ -71,12 +71,25 @@ function Overview() {
     return (
       <div className="space-y-4">
         <h1 className="text-2xl font-semibold tracking-tight">Welcome to MailOps</h1>
-        <Card title="Add your first mailbox">
-          <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">
-            A mailbox is one Gmail address. You can add several, each with its own rules and
-            settings.
+        <Card title="Connect your first Gmail account">
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            MailOps runs a small Apps Script in your own Google account and you control it from
+            here. Setup takes about 5 minutes.
           </p>
-          <AddMailbox suggestedEmail={email} />
+          <Link
+            href="/setup"
+            className="mt-4 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white dark:bg-white dark:text-slate-900"
+          >
+            Start setup →
+          </Link>
+          <details className="mt-6 text-sm">
+            <summary className="cursor-pointer text-slate-500">
+              Or add a mailbox without an engine yet
+            </summary>
+            <div className="mt-3">
+              <AddMailbox suggestedEmail={email} />
+            </div>
+          </details>
         </Card>
       </div>
     );
@@ -113,7 +126,12 @@ function Overview() {
         </Card>
         <Card title="Pending proposals" tone={m.pendingProposals ? 'warn' : 'default'}>
           <p className="text-xl font-semibold">{m.pendingProposals}</p>
-          <p className="mt-1 text-xs text-slate-500">Changes waiting for your approval</p>
+          <Link
+            href="/proposals"
+            className="mt-1 inline-block text-xs text-blue-600 hover:underline"
+          >
+            {m.pendingProposals ? 'Review →' : 'Changes waiting for your approval'}
+          </Link>
         </Card>
       </div>
 
@@ -131,12 +149,15 @@ function Overview() {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Engine connection" tone={m.connected ? 'good' : 'warn'}>
-          <ConnectEngine key={m.id} mailbox={m} />
+        <Card title="Actions" tone={m.connected ? 'default' : 'warn'}>
+          <EngineActions key={m.id} mailbox={m} />
         </Card>
         <div className="lg:col-span-2">
           <Card title="Recent runs">
             <RecentRuns key={m.id} mailboxId={m.id} />
+            <Link href="/runs" className="mt-3 inline-block text-xs text-blue-600 hover:underline">
+              All runs →
+            </Link>
           </Card>
         </div>
       </div>

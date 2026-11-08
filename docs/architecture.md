@@ -12,7 +12,7 @@ A hosted service that reads and changes _other people's_ Gmail must use Google's
 ```mermaid
 flowchart LR
   subgraph User's Google account
-    E[MailOps engine<br/>Apps Script library + template script]
+    E[MailOps engine<br/>standalone Apps Script]
     G[(Gmail)]
     E -- labels / archive / trash / filters --> G
   end
@@ -53,15 +53,27 @@ MCP can read and propose. It can never approve, delete, or turn production on.
 
 ## Engine
 
-- An Apps Script **library**. Users copy a small template that calls it, then paste their connector token.
+- A **standalone Apps Script project** (no spreadsheet). Users copy a template, run `setup`, and approve a pairing code on the dashboard. See [engine/README.md](../engine/README.md).
+- **Pairing**, like signing in to a TV app:
+
+  1. The engine sends a Google identity token (`ScriptApp.getIdentityToken()`), which proves its Gmail address.
+  2. It gets back a short code to show the user.
+  3. The signed-in user approves that code on the dashboard.
+  4. The engine polls and receives its connector token once.
+
+  No secret is ever copied by hand.
+
 - **Triggers:**
-  - nightly lifecycle run: archive / trash per rule, resumable batches, quota-aware
-  - 15-minute sync: heartbeat, pull config and commands, apply, report.
+  - nightly lifecycle pass: archive and trash per rule, in resumable batches of up to 4 minutes, quota-aware
+  - 15-minute sync: heartbeat, pull config and commands, apply them, report, mirror labels and filters (with filter health).
+- **Config:** rules and settings come from the dashboard and are cached in Script Properties. If the dashboard is down, the engine keeps working from the cache; production pauses after 3 days without a fresh config.
 - **Safety:**
   - dry run by default
   - move to Trash only, never permanent delete
   - global guard: starred, Important and a protected label (`Keep`) are never touched
   - Never Delete rules
+  - changed rules preview first (24 h by default)
+  - a per-pass trash limit
   - one bad rule never stops the whole run.
 
 ## Data model (Firestore)
@@ -72,15 +84,17 @@ One **user** (a person, signed in with Google) can manage several **mailboxes** 
 users/{uid}                                   profile (sign-in email)
 users/{uid}/mailboxes/{mailboxId}             one Gmail address: email, displayName, connected, settings
   …/rules/{ruleId}                            one per Gmail label
-  …/labels/{labelId}                          mirrored from Gmail by the engine
-  …/filters/{filterId}                        mirrored + health (matches vs labelled, 30 days)
-  …/proposals/{id}                            kind, payload, source (web|mcp), status
+  …/mirror/labels, …/mirror/filters           Gmail labels and filters as reported by the engine (+ filter health)
+  …/proposals/{id}                            kind, payload, source (web|mcp), status, result
+  …/commands/{id}                             work for the engine: queued → sent → done | failed
   …/runs/{runId}                              mode, status, counts, engine version
-  …/stats/{yyyy-mm-dd}                        one doc per day, counts by label
-  …/events/{id}                               audit trail, pruned after retentionDays (default 90)
-  …/heartbeat/engine                          lastSeenAt, lastRunAt, status, version
+  …/stats/{yyyy-mm-dd}                        one doc per day, counts per mode
+  …/events/{runId_messageId_action}           audit trail; expireAt = at + retentionDays, pruned daily
+  …/heartbeat/engine                          lastSeenAt, lastRunAt, status, version, engine state
 connectorTokens/{sha256}                      server-only: { uid, mailboxId }; one per mailbox
-mcpTokens/{sha256}                            server-only: { uid, scopes }; MCP tools take a mailbox
+pairings/{sha256(deviceCode)}                 server-only: pending engine pairings (15 min)
+mcpTokens/{sha256}                            server-only: MCP personal tokens and OAuth access tokens
+oauthClients/{id}, oauthCodes/…, oauthGrants/…  server-only: MCP OAuth (clients, codes, refresh tokens)
 ```
 
 - `mailboxId` is a hash of the lowercased address, so the same address can't be added twice. Each user can have up to 20 mailboxes.
@@ -104,5 +118,6 @@ Self-hosting gives each deployment its own quotas. A commercial hosted instance 
 ## Monitoring
 
 - The engine heartbeat is updated on every sync. The dashboard shows **STALE** after 26 h.
-- The engine emails the user (from their own account) on a failed run, or when the nightly run is overdue.
-- Retention pruning runs inside the engine's sync, so no server cron is needed.
+- The engine emails the user (from their own account) on a failed run, or when the nightly pass is overdue.
+- A daily Vercel Cron (`/api/cron/monitor`) flags engines that stopped checking in. This catches a dead engine that can't email anyone. It emails through Resend if `RESEND_API_KEY` is set.
+- Old audit events are pruned by the API (about once a day per mailbox). This works on the free Spark plan, where Firestore TTL policies aren't available.

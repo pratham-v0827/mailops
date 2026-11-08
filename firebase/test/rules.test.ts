@@ -96,3 +96,30 @@ describe('server-only collections', () => {
     await assertFails(setDoc(doc(db, 'mcpTokens/def'), { uid: 'alice' }));
   });
 });
+
+describe('server-only secrets', () => {
+  it('tokens, OAuth data and pairings are closed to every client', async () => {
+    const db = env.authenticatedContext('alice').firestore();
+    for (const path of [
+      'connectorTokens/abc',
+      'mcpTokens/abc',
+      'oauthClients/mcpc_x',
+      'oauthCodes/abc',
+      'oauthGrants/abc',
+      'pairings/abc',
+    ]) {
+      await assertFails(getDoc(doc(db, path)));
+      await assertFails(setDoc(doc(db, path), { uid: 'alice' }));
+    }
+  });
+
+  it("a user can read their own commands and events, but not another user's", async () => {
+    const db = env.authenticatedContext('alice').firestore();
+    await assertSucceeds(getDocs(collection(db, 'users/alice/mailboxes/mb_work/commands')));
+    await assertSucceeds(getDocs(collection(db, 'users/alice/mailboxes/mb_work/events')));
+    await assertFails(getDocs(collection(db, 'users/bob/mailboxes/mb_home/events')));
+    await assertFails(
+      setDoc(doc(db, 'users/alice/mailboxes/mb_work/commands/c1'), { kind: 'run.start' }),
+    );
+  });
+});

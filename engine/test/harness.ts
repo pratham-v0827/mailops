@@ -84,6 +84,7 @@ export function makeEngine(opts: { messages?: FakeMessage[]; userLabels?: string
   const triggers: { handler: string; kind: string; id: number }[] = [];
   let triggerId = 1;
   const mails: any[] = [];
+  const lockBusy = { value: false };
 
   const api: Api = {
     settings: {},
@@ -180,7 +181,9 @@ export function makeEngine(opts: { messages?: FakeMessage[]; userLabels?: string
         getKeys: () => [...props.keys()],
       }),
     },
-    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
+    LockService: {
+      getScriptLock: () => ({ tryLock: () => !lockBusy.value, releaseLock: () => {} }),
+    },
     Utilities: {
       sleep: () => {},
       getUuid: () => Math.random().toString(16).slice(2).padEnd(12, '0'),
@@ -292,6 +295,12 @@ export function makeEngine(opts: { messages?: FakeMessage[]; userLabels?: string
       return m.labelIds.map((l) => labels.find((x) => x.id === l)?.name ?? l);
     },
     connect: () => props.set('MAILOPS_TOKEN', 'mops_' + 't'.repeat(43)),
+    lockBusy,
+    breakFilters: () => {
+      sandbox.Gmail.Users.Settings.Filters.list = () => {
+        throw new Error('Backend Error');
+      };
+    },
   };
 }
 

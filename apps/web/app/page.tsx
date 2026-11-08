@@ -10,7 +10,10 @@ export default function SignInPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (user) router.replace('/dashboard');
+    if (!user) return;
+    const next = new URLSearchParams(window.location.search).get('next') ?? '';
+    // Only same-site paths (no "//host" or "https://…").
+    router.replace(/^\/(?![/\\])/.test(next) ? next : '/dashboard');
   }, [user, router]);
 
   return (

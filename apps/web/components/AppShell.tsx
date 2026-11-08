@@ -9,6 +9,12 @@ import { MailboxProvider, mailboxLabel, useMailboxes } from './MailboxProvider';
 const NAV = [
   { href: '/dashboard', label: 'Overview' },
   { href: '/rules', label: 'Rules' },
+  { href: '/activity', label: 'Activity' },
+  { href: '/runs', label: 'Runs' },
+  { href: '/labels', label: 'Labels' },
+  { href: '/filters', label: 'Filters' },
+  { href: '/proposals', label: 'Proposals' },
+  { href: '/settings', label: 'Settings' },
 ];
 
 /** Signed-in layout: header with navigation and mailbox switcher; redirects to sign-in when signed out. */
@@ -17,7 +23,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !user) router.replace('/');
+    if (!loading && !user) {
+      const here = window.location.pathname + window.location.search;
+      router.replace(here === '/dashboard' ? '/' : `/?next=${encodeURIComponent(here)}`);
+    }
   }, [loading, user, router]);
 
   if (loading || !user) {
@@ -34,6 +43,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const { signOut } = useAuth();
   const { email, mailboxes, selected, select } = useMailboxes();
   const pathname = usePathname();
+  const pendingCount = mailboxes.reduce((n, m) => n + m.pendingProposals, 0);
 
   return (
     <div className="min-h-screen">
@@ -42,12 +52,12 @@ function Shell({ children }: { children: React.ReactNode }) {
           <Link href="/dashboard" className="font-semibold tracking-tight">
             MailOps
           </Link>
-          <nav className="flex gap-1 text-sm">
+          <nav className="-mx-1 flex max-w-full gap-1 overflow-x-auto text-sm">
             {NAV.map((n) => (
               <Link
                 key={n.href}
                 href={n.href}
-                className={`rounded-md px-3 py-1.5 ${
+                className={`whitespace-nowrap rounded-md px-3 py-1.5 ${
                   pathname === n.href
                     ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
                     : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -57,6 +67,14 @@ function Shell({ children }: { children: React.ReactNode }) {
               </Link>
             ))}
           </nav>
+          {pendingCount > 0 && (
+            <Link
+              href="/proposals"
+              className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+            >
+              {pendingCount} to approve
+            </Link>
+          )}
           {mailboxes.length > 0 && (
             <label className="flex items-center gap-2 text-sm">
               <span className="text-slate-500">Mailbox</span>

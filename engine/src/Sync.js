@@ -26,11 +26,29 @@ function mailopsSync() {
       );
       return 'rejected';
     }
-    if (cfg.pendingCommands > 0) processCommands_(cfg);
-    ensureTriggers_(cfg.settings);
-    refreshMirrors_();
-    checkOverdue_(cfg);
-    return 'ok';
+    // Each step is independent: one failing (e.g. a Gmail hiccup) must not skip the others or
+    // fail the trigger (Google emails the owner about failed triggers).
+    const problems = [];
+    const step = function (name, fn) {
+      try {
+        fn();
+      } catch (e) {
+        problems.push(name + ': ' + (e && e.message ? e.message : e));
+      }
+    };
+    if (cfg.pendingCommands > 0)
+      step('commands', function () {
+        processCommands_(cfg);
+      });
+    step('triggers', function () {
+      ensureTriggers_(cfg.settings);
+    });
+    step('mirrors', refreshMirrors_);
+    step('overdue', function () {
+      checkOverdue_(cfg);
+    });
+    if (problems.length) console.warn('MailOps sync: ' + problems.join(' | '));
+    return problems.length ? 'ok with problems: ' + problems.join(' | ') : 'ok';
   } finally {
     lock.releaseLock();
   }

@@ -54,8 +54,22 @@ The CLI can't do these two; use the console:
 
 Firebase console → _Authentication → Settings → Authorized domains → Add domain_ → your `*.vercel.app` domain (without `https://`).
 
-## 4. First sign-in
+## 4. Optional settings
 
-Open your Vercel URL → **Sign in with Google** → **Rules** → import your rules JSON once. After that, changes are proposals you approve.
+| Name                              | What                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------ |
+| `NEXT_PUBLIC_ENGINE_TEMPLATE_URL` | Link to a view-only Apps Script engine project. The Setup page offers it as "Make a copy". |
+| `CRON_SECRET`                     | Any long random string. Enables the daily stale-engine check (Vercel Cron).                |
+| `RESEND_API_KEY`, `ALERT_FROM`    | Email alerts for engines that stopped checking in ([Resend](https://resend.com)).          |
 
-The engine (Apps Script) connects in milestone M3; until then the Overview shows _Engine: Not connected_.
+**Publishing an engine template:**
+
+1. Create a standalone Apps Script project and `clasp push` the [`engine/src`](../engine/src) files into it.
+2. In _Share_, set it to "Anyone with the link: Viewer".
+3. Put its `https://script.google.com/d/<id>/edit` URL in `NEXT_PUBLIC_ENGINE_TEMPLATE_URL`.
+4. Self-hosted engines must point to your dashboard: set the Script Property `MAILOPS_URL` in the template, or have users set it in their copy.
+
+## 5. First sign-in
+
+1. Open your Vercel URL → **Sign in with Google** → **Setup**, and follow the steps to connect your first Gmail account.
+2. Then add or import rules on the **Rules** page.

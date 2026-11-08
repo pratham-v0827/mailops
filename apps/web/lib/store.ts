@@ -48,6 +48,7 @@ export type MailboxSummary = {
     reportedMode: 'dry' | 'prod' | null;
     reportedAutomationEnabled: boolean | null;
     engineVersion: string | null;
+    state: Record<string, unknown> | null;
   } | null;
 };
 
@@ -79,6 +80,7 @@ async function summarise(ref: DocumentReference): Promise<MailboxSummary> {
           reportedAutomationEnabled:
             typeof h.reportedAutomationEnabled === 'boolean' ? h.reportedAutomationEnabled : null,
           engineVersion: (h.engineVersion as string) ?? null,
+          state: (h.state as Record<string, unknown>) ?? null,
         }
       : null,
   };
@@ -118,11 +120,18 @@ export async function requireMailbox(uid: string, mailboxId: string): Promise<Do
   return ref;
 }
 
-export async function listRules(mailbox: DocumentReference): Promise<(Rule & { id: string })[]> {
+export type RuleRow = Rule & { id: string; changedAt: string | null; changedBy: string | null };
+
+export async function listRules(mailbox: DocumentReference): Promise<RuleRow[]> {
   const snap = await mailbox.collection('rules').orderBy('label').get();
   return snap.docs.map((d) => {
-    const { updatedAt: _u, updatedBy: _b, ...rule } = d.data();
-    return { id: d.id, ...(rule as Rule) };
+    const { updatedAt, updatedBy, ...rule } = d.data();
+    return {
+      id: d.id,
+      ...(rule as Rule),
+      changedAt: iso(updatedAt),
+      changedBy: (updatedBy as string) ?? null,
+    };
   });
 }
 
@@ -147,10 +156,17 @@ export async function importRules(mailbox: DocumentReference, rules: Rule[]): Pr
   return rules.length;
 }
 
-export async function listProposals(mailbox: DocumentReference, status = 'pending') {
+export async function listProposals(
+  mailbox: DocumentReference,
+  status: 'pending' | 'decided' = 'pending',
+) {
   const snap = await mailbox
     .collection('proposals')
-    .where('status', '==', status)
+    .where(
+      'status',
+      'in',
+      status === 'pending' ? ['pending'] : ['approved', 'applied', 'rejected', 'failed'],
+    )
     .orderBy('createdAt', 'desc')
     .limit(100)
     .get();
@@ -163,6 +179,8 @@ export async function listProposals(mailbox: DocumentReference, status = 'pendin
       status: data.status as string,
       reason: (data.reason as string) ?? '',
       createdAt: iso(data.createdAt),
+      decidedBy: (data.decidedBy as string) ?? null,
+      result: (data.result as { ok: boolean; message: string } | undefined) ?? null,
     };
   });
 }
