@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ImportBody } from './import';
-import { ruleIdFor } from './ids';
+import { mailboxIdFor, ruleIdFor } from './ids';
 
 describe('ImportBody', () => {
   it('accepts valid rules and applies schema defaults', () => {
@@ -27,6 +27,14 @@ describe('ImportBody', () => {
 
   it('rejects an empty import', () => {
     expect(ImportBody.safeParse({ rules: [] }).success).toBe(false);
+  });
+});
+
+describe('mailboxIdFor', () => {
+  it('is case- and whitespace-insensitive, so the same Gmail address is detected', () => {
+    expect(mailboxIdFor(' Work@Example.com ')).toBe(mailboxIdFor('work@example.com'));
+    expect(mailboxIdFor('work@example.com')).toMatch(/^mb_[0-9a-f]{20}$/);
+    expect(mailboxIdFor('work@example.com')).not.toBe(mailboxIdFor('home@example.com'));
   });
 });
 

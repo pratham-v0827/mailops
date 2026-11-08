@@ -2,19 +2,27 @@
 
 You need a free **Firebase** project and a free **Vercel** account. Allow about 15 minutes. You'll handle two secrets along the way, the service-account JSON and your Vercel env vars. Never commit them or share them.
 
-## 1. Firebase project
+## 1. Firebase project (mostly CLI)
 
-1. Go to <https://console.firebase.google.com> → **Create a project**. The Spark (free) plan is enough; Google Analytics is optional.
-2. **Firestore:** _Build → Firestore Database → Create database_ → **production mode** → choose a location near you (it can't be changed later).
-3. **Google sign-in:** _Build → Authentication → Get started → Sign-in method → Google → Enable_, and pick a support email.
-4. **Web app config:** _Project settings (⚙) → General → Your apps → Web (`</>`)_, register an app (no Hosting needed), and copy `apiKey`, `authDomain`, `projectId` and `appId`.
-5. **Service account (server secret):** _Project settings → Service accounts → Generate new private key._ Keep the downloaded JSON private.
-6. **Deploy the security rules and indexes** from this repo. The `firebase login` step opens your browser:
-   ```bash
-   cd firebase
-   corepack pnpm exec firebase login
-   corepack pnpm exec firebase deploy --only firestore --project <your-project-id>
-   ```
+From the repo's `firebase/` folder (the CLI is a dev dependency, so no global install is needed):
+
+```bash
+cd firebase
+corepack pnpm exec firebase login                                   # opens your browser once
+corepack pnpm exec firebase projects:create mailops-<suffix> --display-name "MailOps"
+corepack pnpm exec firebase apps:create web "MailOps Web" --project mailops-<suffix>
+corepack pnpm exec firebase apps:sdkconfig web <appId> --project mailops-<suffix>   # the 4 public config values
+corepack pnpm exec firebase deploy --only firestore --project mailops-<suffix>      # enables the Firestore API, deploys rules + indexes
+corepack pnpm exec firebase firestore:databases:create "(default)" --location asia-south1 --project mailops-<suffix>
+corepack pnpm exec firebase deploy --only firestore --project mailops-<suffix>      # again, now that the database exists
+```
+
+A brand-new project can return 403 for a minute or two while its APIs and permissions propagate. Just retry.
+
+The CLI can't do these two; use the console:
+
+1. **Google sign-in:** _Build → Authentication → Get started → Sign-in method → Google → Enable_, and pick a support email.
+2. **Service account (server secret):** _Project settings → Service accounts → Generate new private key._ Keep the downloaded JSON private.
 
 ## 2. Vercel
 
@@ -24,11 +32,11 @@ You need a free **Firebase** project and a free **Vercel** account. Allow about 
 
    | Name                               | Value                                                         |
    | ---------------------------------- | ------------------------------------------------------------- |
-   | `NEXT_PUBLIC_FIREBASE_API_KEY`     | from step 1.4                                                 |
-   | `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | from step 1.4                                                 |
-   | `NEXT_PUBLIC_FIREBASE_PROJECT_ID`  | from step 1.4                                                 |
-   | `NEXT_PUBLIC_FIREBASE_APP_ID`      | from step 1.4                                                 |
-   | `FIREBASE_SERVICE_ACCOUNT_JSON`    | the whole JSON from step 1.5, pasted as one value             |
+   | `NEXT_PUBLIC_FIREBASE_API_KEY`     | from `apps:sdkconfig` (step 1)                                |
+   | `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | from `apps:sdkconfig` (step 1)                                |
+   | `NEXT_PUBLIC_FIREBASE_PROJECT_ID`  | from `apps:sdkconfig` (step 1)                                |
+   | `NEXT_PUBLIC_FIREBASE_APP_ID`      | from `apps:sdkconfig` (step 1)                                |
+   | `FIREBASE_SERVICE_ACCOUNT_JSON`    | the whole service-account JSON, pasted as one value           |
    | `ALLOWED_EMAILS`                   | your Google email(s), comma-separated. Only these can sign in |
 
 4. **Deploy.** You get a URL like `https://mailops-xxxx.vercel.app`.

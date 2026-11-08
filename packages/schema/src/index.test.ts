@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { FilterCriteria, LabelName, Proposal, Rule, Settings } from './index';
+import { FilterCriteria, LabelName, NewMailbox, Proposal, Rule, Settings } from './index';
+
+describe('NewMailbox', () => {
+  it('normalises the email and defaults the name', () => {
+    expect(NewMailbox.parse({ email: '  Work@Example.COM ' })).toEqual({
+      email: 'work@example.com',
+      displayName: '',
+    });
+  });
+
+  it('rejects non-emails', () => {
+    expect(NewMailbox.safeParse({ email: 'not-an-email' }).success).toBe(false);
+  });
+});
 
 describe('Rule', () => {
   it('fills safe defaults', () => {

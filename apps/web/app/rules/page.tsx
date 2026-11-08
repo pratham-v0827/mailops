@@ -1,9 +1,11 @@
 'use client';
 
 import { Rule } from '@mailops/schema';
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell, Card, ErrorNote } from '../../components/AppShell';
 import { ApiError, useAuth } from '../../components/AuthProvider';
+import { mailboxLabel, useMailboxes } from '../../components/MailboxProvider';
 import type { ProposalsResponse, ProposalView, RulesResponse } from '../../lib/api-types';
 
 type RuleRow = RulesResponse['rules'][number];
@@ -11,7 +13,7 @@ type RuleRow = RulesResponse['rules'][number];
 export default function RulesPage() {
   return (
     <AppShell>
-      <Rules />
+      <RulesForSelectedMailbox />
     </AppShell>
   );
 }
@@ -20,8 +22,34 @@ function days(v: number | null) {
   return v === null ? '—' : `${v} d`;
 }
 
-function Rules() {
+function RulesForSelectedMailbox() {
+  const { selected, loading, error } = useMailboxes();
+  if (error) return <ErrorNote status={error.status} message={error.message} />;
+  if (loading) return <p className="text-sm text-slate-500">Loading…</p>;
+  if (!selected) {
+    return (
+      <p className="text-sm text-slate-500">
+        Add a mailbox on the{' '}
+        <Link href="/dashboard" className="text-blue-600 hover:underline">
+          Overview
+        </Link>{' '}
+        first.
+      </p>
+    );
+  }
+  // Remount per mailbox so state never leaks between mailboxes.
+  return (
+    <Rules
+      key={selected.id}
+      base={`/api/web/mailboxes/${selected.id}`}
+      title={mailboxLabel(selected)}
+    />
+  );
+}
+
+function Rules({ base, title }: { base: string; title: string }) {
   const { api } = useAuth();
+  const { reload: reloadMailboxes } = useMailboxes();
   const [rules, setRules] = useState<RuleRow[] | null>(null);
   const [proposals, setProposals] = useState<ProposalView[]>([]);
   const [error, setError] = useState<ApiError | null>(null);
@@ -29,11 +57,17 @@ function Rules() {
   const [editing, setEditing] = useState<RuleRow | null>(null);
 
   const load = useCallback(() => {
-    api<RulesResponse>('/api/web/rules').then((r) => setRules(r.rules), setError);
-    api<ProposalsResponse>('/api/web/proposals').then((p) => setProposals(p.proposals), setError);
-  }, [api]);
+    api<RulesResponse>(`${base}/rules`).then((r) => setRules(r.rules), setError);
+    api<ProposalsResponse>(`${base}/proposals`).then((p) => setProposals(p.proposals), setError);
+  }, [api, base]);
 
   useEffect(load, [load]);
+
+  // After a change, refresh this page and the mailbox counts shown elsewhere.
+  const changed = useCallback(() => {
+    load();
+    void reloadMailboxes();
+  }, [load, reloadMailboxes]);
 
   const shown = useMemo(
     () => (rules ?? []).filter((r) => r.label.toLowerCase().includes(filter.toLowerCase())),
@@ -42,7 +76,7 @@ function Rules() {
 
   if (error) return <ErrorNote status={error.status} message={error.message} />;
   if (!rules) return <p className="text-sm text-slate-500">Loading…</p>;
-  if (rules.length === 0) return <ImportRules onDone={load} />;
+  if (rules.length === 0) return <ImportRules base={base} title={title} onDone={changed} />;
 
   return (
     <div className="space-y-6">
@@ -50,7 +84,7 @@ function Rules() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Rules</h1>
           <p className="text-sm text-slate-500">
-            {rules.length} rules · changes are proposals until you approve them
+            {title} · {rules.length} rules · changes are proposals until you approve them
           </p>
         </div>
         <input
@@ -116,11 +150,12 @@ function Rules() {
 
       {editing && (
         <ProposeRule
+          base={base}
           rule={editing}
           onClose={() => setEditing(null)}
           onSent={() => {
             setEditing(null);
-            load();
+            changed();
           }}
         />
       )}
@@ -129,10 +164,12 @@ function Rules() {
 }
 
 function ProposeRule({
+  base,
   rule,
   onClose,
   onSent,
 }: {
+  base: string;
   rule: RuleRow;
   onClose: () => void;
   onSent: () => void;
@@ -161,7 +198,7 @@ function ProposeRule({
       return;
     }
     try {
-      await api('/api/web/proposals', {
+      await api(`${base}/proposals`, {
         method: 'POST',
         body: JSON.stringify({ payload: { kind: 'rule.upsert', rule: parsed.data }, reason }),
       });
@@ -248,7 +285,7 @@ function ProposeRule({
   );
 }
 
-function ImportRules({ onDone }: { onDone: () => void }) {
+function ImportRules({ base, title, onDone }: { base: string; title: string; onDone: () => void }) {
   const { api } = useAuth();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -263,7 +300,7 @@ function ImportRules({ onDone }: { onDone: () => void }) {
     setMessage('');
     try {
       const body = JSON.parse(text);
-      const res = await api<{ imported: number }>('/api/web/rules/import', {
+      const res = await api<{ imported: number }>(`${base}/rules/import`, {
         method: 'POST',
         body: JSON.stringify(Array.isArray(body) ? { rules: body } : body),
       });
@@ -285,9 +322,9 @@ function ImportRules({ onDone }: { onDone: () => void }) {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold tracking-tight">Rules</h1>
-      <Card title="Import your rules">
+      <Card title={`Import rules for ${title}`}>
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          You have no rules yet. Import them once from a JSON file (an array of rules, or{' '}
+          This mailbox has no rules yet. Import them once from a JSON file (an array of rules, or{' '}
           <code>{'{ "rules": [...] }'}</code>). After that, every change is a proposal you approve.
         </p>
         <input

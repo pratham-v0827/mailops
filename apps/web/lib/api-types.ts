@@ -2,8 +2,12 @@ import type { ProposalPayload, Rule, Settings } from '@mailops/schema';
 
 // Shapes returned by /api/web/*. Client-safe (no server imports).
 
-export type MeResponse = {
+export type MailboxView = {
+  id: string;
   email: string;
+  displayName: string;
+  /** True once this Gmail account's engine has checked in (M3). */
+  connected: boolean;
   settings: Settings;
   ruleCount: number;
   pendingProposals: number;
@@ -14,6 +18,8 @@ export type MeResponse = {
     engineVersion: string | null;
   } | null;
 };
+
+export type MeResponse = { email: string; mailboxes: MailboxView[] };
 
 export type RulesResponse = { rules: (Rule & { id: string })[] };
 

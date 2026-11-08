@@ -1,21 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { AddMailbox } from '../../components/AddMailbox';
 import { AppShell, Card, ErrorNote } from '../../components/AppShell';
-import { ApiError, useAuth } from '../../components/AuthProvider';
-import type { MeResponse } from '../../lib/api-types';
+import { mailboxLabel, useMailboxes } from '../../components/MailboxProvider';
+import type { MailboxView } from '../../lib/api-types';
 
-function engineStatus(me: MeResponse) {
-  const e = me.engine;
-  if (!e?.lastSeenAt)
+function engineStatus(m: MailboxView) {
+  const e = m.engine;
+  if (!e?.lastSeenAt) {
     return {
       label: 'Not connected',
       tone: 'warn' as const,
-      note: 'Connect your Apps Script engine (coming in M3).',
+      note: 'Connect this Gmail account’s Apps Script engine (coming in M3).',
     };
+  }
   const hours = (Date.now() - new Date(e.lastSeenAt).getTime()) / 36e5;
-  if (hours > me.settings.staleAfterHours) {
+  if (hours > m.settings.staleAfterHours) {
     return {
       label: 'STALE',
       tone: 'warn' as const,
@@ -38,25 +40,36 @@ export default function OverviewPage() {
 }
 
 function Overview() {
-  const { api } = useAuth();
-  const [me, setMe] = useState<MeResponse | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-
-  useEffect(() => {
-    api<MeResponse>('/api/web/me').then(setMe, setError);
-  }, [api]);
+  const { email, mailboxes, selected, select, error, loading } = useMailboxes();
+  const [adding, setAdding] = useState(false);
 
   if (error) return <ErrorNote status={error.status} message={error.message} />;
-  if (!me) return <p className="text-sm text-slate-500">Loading…</p>;
+  if (loading) return <p className="text-sm text-slate-500">Loading…</p>;
 
-  const engine = engineStatus(me);
-  const s = me.settings;
+  if (mailboxes.length === 0) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Welcome to MailOps</h1>
+        <Card title="Add your first mailbox">
+          <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">
+            A mailbox is one Gmail address. You can add several, each with its own rules and
+            settings.
+          </p>
+          <AddMailbox suggestedEmail={email} />
+        </Card>
+      </div>
+    );
+  }
+
+  const m = selected ?? mailboxes[0]!;
+  const engine = engineStatus(m);
+  const s = m.settings;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
-        <p className="text-sm text-slate-500">{me.email}</p>
+        <p className="text-sm text-slate-500">{mailboxLabel(m)}</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -71,13 +84,13 @@ function Overview() {
           </p>
         </Card>
         <Card title="Rules">
-          <p className="text-xl font-semibold">{me.ruleCount}</p>
+          <p className="text-xl font-semibold">{m.ruleCount}</p>
           <Link href="/rules" className="mt-1 inline-block text-xs text-blue-600 hover:underline">
-            {me.ruleCount ? 'View rules →' : 'Import rules →'}
+            {m.ruleCount ? 'View rules →' : 'Import rules →'}
           </Link>
         </Card>
-        <Card title="Pending proposals" tone={me.pendingProposals ? 'warn' : 'default'}>
-          <p className="text-xl font-semibold">{me.pendingProposals}</p>
+        <Card title="Pending proposals" tone={m.pendingProposals ? 'warn' : 'default'}>
+          <p className="text-xl font-semibold">{m.pendingProposals}</p>
           <p className="mt-1 text-xs text-slate-500">Changes waiting for your approval</p>
         </Card>
       </div>
@@ -93,6 +106,49 @@ function Overview() {
         <p className="mt-3 text-xs text-slate-500">
           MailOps only moves mail to Trash (recoverable for 30 days). It never deletes permanently.
         </p>
+      </Card>
+
+      <Card title={`All mailboxes (${mailboxes.length})`}>
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="py-2">Mailbox</th>
+              <th className="py-2">Engine</th>
+              <th className="py-2">Mode</th>
+              <th className="py-2">Rules</th>
+              <th className="py-2">Pending</th>
+            </tr>
+          </thead>
+          <tbody>
+            {mailboxes.map((x) => (
+              <tr
+                key={x.id}
+                onClick={() => select(x.id)}
+                className={`cursor-pointer border-t border-slate-100 dark:border-slate-800 ${
+                  x.id === m.id ? 'font-medium' : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                <td className="py-2">{mailboxLabel(x)}</td>
+                <td className="py-2">{engineStatus(x).label}</td>
+                <td className="py-2">{x.settings.dryRun ? 'Dry run' : 'Production'}</td>
+                <td className="py-2">{x.ruleCount}</td>
+                <td className="py-2">{x.pendingProposals}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-4">
+          {adding ? (
+            <AddMailbox onAdded={() => setAdding(false)} />
+          ) : (
+            <button
+              onClick={() => setAdding(true)}
+              className="text-sm text-blue-600 hover:underline"
+            >
+              + Add another mailbox
+            </button>
+          )}
+        </div>
       </Card>
     </div>
   );

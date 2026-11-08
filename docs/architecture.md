@@ -66,21 +66,27 @@ MCP can read and propose. It can never approve, delete, or turn production on.
 
 ## Data model (Firestore)
 
+One **user** (a person, signed in with Google) can manage several **mailboxes** (Gmail addresses). Each mailbox has its own rules, settings, proposals, runs and engine, because each Gmail account runs its own Apps Script engine.
+
 ```
-users/{uid}                          profile, settings
-users/{uid}/rules/{ruleId}           one per Gmail label
-users/{uid}/labels/{labelId}         mirrored from Gmail by the engine
-users/{uid}/filters/{filterId}       mirrored + health (matches vs labelled, 30 days)
-users/{uid}/proposals/{id}           kind, payload, source (web|mcp), status
-users/{uid}/runs/{runId}             mode, status, counts, engine version
-users/{uid}/stats/{yyyy-mm-dd}       one doc per day, counts by label
-users/{uid}/events/{id}              audit trail, pruned after retentionDays (default 90)
-users/{uid}/heartbeat/engine         lastSeenAt, lastRunAt, status, version
-connectorTokens/{sha256}             server-only
-mcpTokens/{sha256}                   server-only
+users/{uid}                                   profile (sign-in email)
+users/{uid}/mailboxes/{mailboxId}             one Gmail address: email, displayName, connected, settings
+  …/rules/{ruleId}                            one per Gmail label
+  …/labels/{labelId}                          mirrored from Gmail by the engine
+  …/filters/{filterId}                        mirrored + health (matches vs labelled, 30 days)
+  …/proposals/{id}                            kind, payload, source (web|mcp), status
+  …/runs/{runId}                              mode, status, counts, engine version
+  …/stats/{yyyy-mm-dd}                        one doc per day, counts by label
+  …/events/{id}                               audit trail, pruned after retentionDays (default 90)
+  …/heartbeat/engine                          lastSeenAt, lastRunAt, status, version
+connectorTokens/{sha256}                      server-only: { uid, mailboxId }; one per mailbox
+mcpTokens/{sha256}                            server-only: { uid, scopes }; MCP tools take a mailbox
 ```
 
-**Privacy:** email bodies are never stored. Audit events keep the sender domain, label and action; subjects are opt-in per user.
+- `mailboxId` is a hash of the lowercased address, so the same address can't be added twice. Each user can have up to 20 mailboxes.
+- A mailbox is `connected: false` until its engine checks in with that mailbox's connector token. That check-in proves the user controls the Gmail account.
+
+**Privacy:** email bodies are never stored. Audit events keep the sender domain, label and action; subjects are opt-in per mailbox.
 
 Schemas live in [`packages/schema`](../packages/schema) and are shared by web, API, MCP and engine.
 

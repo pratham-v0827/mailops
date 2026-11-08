@@ -31,6 +31,9 @@ beforeEach(async () => {
     await setDoc(doc(db, 'users/alice'), { email: 'alice@example.com' });
     await setDoc(doc(db, 'users/alice/rules/r1'), { label: 'Newsletters', trashAfterDays: 30 });
     await setDoc(doc(db, 'users/bob/rules/r1'), { label: 'Receipts', neverDelete: true });
+    await setDoc(doc(db, 'users/alice/mailboxes/mb_work'), { email: 'work@example.com' });
+    await setDoc(doc(db, 'users/alice/mailboxes/mb_work/rules/r1'), { label: 'Invoices' });
+    await setDoc(doc(db, 'users/bob/mailboxes/mb_home/rules/r1'), { label: 'Bills' });
     await setDoc(doc(db, 'connectorTokens/abc'), { uid: 'alice' });
   });
 });
@@ -48,6 +51,20 @@ describe('own data', () => {
     await assertFails(setDoc(doc(db, 'users/alice/rules/r2'), { label: 'Sneaky' }));
     await assertFails(setDoc(doc(db, 'users/alice'), { email: 'x@example.com' }));
     await assertFails(deleteDoc(doc(db, 'users/alice/rules/r1')));
+  });
+});
+
+describe('mailboxes', () => {
+  it("a user can read every one of their own mailboxes and each mailbox's rules", async () => {
+    const db = env.authenticatedContext('alice').firestore();
+    await assertSucceeds(getDocs(collection(db, 'users/alice/mailboxes')));
+    await assertSucceeds(getDoc(doc(db, 'users/alice/mailboxes/mb_work/rules/r1')));
+  });
+
+  it("another user's mailboxes are closed, and no client can write a mailbox", async () => {
+    const db = env.authenticatedContext('alice').firestore();
+    await assertFails(getDoc(doc(db, 'users/bob/mailboxes/mb_home/rules/r1')));
+    await assertFails(setDoc(doc(db, 'users/alice/mailboxes/mb_new'), { email: 'x@example.com' }));
   });
 });
 

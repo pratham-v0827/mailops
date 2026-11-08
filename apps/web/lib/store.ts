@@ -1,46 +1,123 @@
-import { Settings, type ProposalPayload, type Rule } from '@mailops/schema';
-import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import {
+  MAX_MAILBOXES_PER_USER,
+  Settings,
+  type NewMailbox,
+  type ProposalPayload,
+  type Rule,
+} from '@mailops/schema';
+import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
+import type { SessionUser } from './auth';
 import { adminDb } from './firebase-admin';
 import { HttpError } from './http';
-import { ruleIdFor } from './ids';
-import type { SessionUser } from './auth';
+import { mailboxIdFor, ruleIdFor } from './ids';
 
-const userRef = (db: Firestore, uid: string) => db.collection('users').doc(uid);
+const userRef = (uid: string) => adminDb().collection('users').doc(uid);
+const mailboxesCol = (uid: string) => userRef(uid).collection('mailboxes');
 
-/** Creates the profile with safe default settings on first sign-in; returns current settings. */
-export async function ensureUser(user: SessionUser): Promise<Settings> {
-  const db = adminDb();
-  const ref = userRef(db, user.uid);
-  const snap = await ref.get();
-  if (!snap.exists) {
-    const settings = Settings.parse({});
-    await ref.set({
-      email: user.email,
+const iso = (v: unknown): string | null =>
+  (v as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? null;
+
+/** Creates the user profile on first sign-in. */
+export async function ensureUser(user: SessionUser): Promise<void> {
+  const ref = userRef(user.uid);
+  if (!(await ref.get()).exists) {
+    await ref.set({ email: user.email, createdAt: FieldValue.serverTimestamp() });
+  }
+}
+
+export type MailboxSummary = {
+  id: string;
+  email: string;
+  displayName: string;
+  connected: boolean;
+  settings: Settings;
+  ruleCount: number;
+  pendingProposals: number;
+  engine: {
+    lastSeenAt: string | null;
+    lastRunAt: string | null;
+    lastRunStatus: string | null;
+    engineVersion: string | null;
+  } | null;
+};
+
+async function summarise(ref: DocumentReference): Promise<MailboxSummary> {
+  const [snap, rules, pending, hb] = await Promise.all([
+    ref.get(),
+    ref.collection('rules').count().get(),
+    ref.collection('proposals').where('status', '==', 'pending').count().get(),
+    ref.collection('heartbeat').doc('engine').get(),
+  ]);
+  const d = snap.data() ?? {};
+  const h = hb.data();
+  return {
+    id: ref.id,
+    email: String(d.email ?? ''),
+    displayName: String(d.displayName ?? ''),
+    connected: Boolean(d.connected),
+    settings: Settings.parse(d.settings ?? {}),
+    ruleCount: rules.data().count,
+    pendingProposals: pending.data().count,
+    engine: h
+      ? {
+          lastSeenAt: iso(h.lastSeenAt),
+          lastRunAt: iso(h.lastRunAt),
+          lastRunStatus: (h.lastRunStatus as string) ?? null,
+          engineVersion: (h.engineVersion as string) ?? null,
+        }
+      : null,
+  };
+}
+
+export async function listMailboxes(uid: string): Promise<MailboxSummary[]> {
+  const snap = await mailboxesCol(uid).orderBy('createdAt').get();
+  return Promise.all(snap.docs.map((d) => summarise(d.ref)));
+}
+
+/** Adds a Gmail address to the user's account with safe default settings. */
+export async function addMailbox(uid: string, input: NewMailbox): Promise<MailboxSummary> {
+  const col = mailboxesCol(uid);
+  const ref = col.doc(mailboxIdFor(input.email));
+  await adminDb().runTransaction(async (tx) => {
+    if ((await tx.get(ref)).exists) throw new HttpError(409, `${input.email} is already added`);
+    const count = (await tx.get(col.count())).data().count;
+    if (count >= MAX_MAILBOXES_PER_USER) {
+      throw new HttpError(400, `At most ${MAX_MAILBOXES_PER_USER} mailboxes per account`);
+    }
+    tx.set(ref, {
+      email: input.email,
+      displayName: input.displayName,
+      connected: false,
+      settings: Settings.parse({}),
       createdAt: FieldValue.serverTimestamp(),
-      settings,
     });
-    return settings;
-  }
-  return Settings.parse(snap.get('settings') ?? {});
+  });
+  return summarise(ref);
 }
 
-export async function listRules(uid: string): Promise<(Rule & { id: string })[]> {
-  const snap = await userRef(adminDb(), uid).collection('rules').orderBy('label').get();
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Rule) }));
+/** Returns the mailbox document, or 404 if it isn't one of this user's mailboxes. */
+export async function requireMailbox(uid: string, mailboxId: string): Promise<DocumentReference> {
+  if (!/^mb_[0-9a-f]{20}$/.test(mailboxId)) throw new HttpError(404, 'Mailbox not found');
+  const ref = mailboxesCol(uid).doc(mailboxId);
+  if (!(await ref.get()).exists) throw new HttpError(404, 'Mailbox not found');
+  return ref;
 }
 
-export async function countRules(uid: string): Promise<number> {
-  const agg = await userRef(adminDb(), uid).collection('rules').count().get();
-  return agg.data().count;
+export async function listRules(mailbox: DocumentReference): Promise<(Rule & { id: string })[]> {
+  const snap = await mailbox.collection('rules').orderBy('label').get();
+  return snap.docs.map((d) => {
+    const { updatedAt: _u, updatedBy: _b, ...rule } = d.data();
+    return { id: d.id, ...(rule as Rule) };
+  });
 }
 
-/** One-time seed of rules for a user who has none yet (later changes go through proposals). */
-export async function importRules(uid: string, rules: Rule[]): Promise<number> {
-  if ((await countRules(uid)) > 0) {
-    throw new HttpError(409, 'Rules already exist; change them through proposals instead');
+/** One-time seed of a mailbox's rules (later changes go through proposals). */
+export async function importRules(mailbox: DocumentReference, rules: Rule[]): Promise<number> {
+  if ((await mailbox.collection('rules').count().get()).data().count > 0) {
+    throw new HttpError(409, 'This mailbox already has rules; change them through proposals');
   }
   const db = adminDb();
-  const col = userRef(db, uid).collection('rules');
+  const col = mailbox.collection('rules');
   for (let i = 0; i < rules.length; i += 400) {
     const batch = db.batch();
     for (const r of rules.slice(i, i + 400)) {
@@ -55,8 +132,8 @@ export async function importRules(uid: string, rules: Rule[]): Promise<number> {
   return rules.length;
 }
 
-export async function listProposals(uid: string, status = 'pending') {
-  const snap = await userRef(adminDb(), uid)
+export async function listProposals(mailbox: DocumentReference, status = 'pending') {
+  const snap = await mailbox
     .collection('proposals')
     .where('status', '==', status)
     .orderBy('createdAt', 'desc')
@@ -70,27 +147,18 @@ export async function listProposals(uid: string, status = 'pending') {
       source: data.source as string,
       status: data.status as string,
       reason: (data.reason as string) ?? '',
-      createdAt: data.createdAt?.toDate?.().toISOString() ?? null,
+      createdAt: iso(data.createdAt),
     };
   });
 }
 
-export async function countPendingProposals(uid: string): Promise<number> {
-  const agg = await userRef(adminDb(), uid)
-    .collection('proposals')
-    .where('status', '==', 'pending')
-    .count()
-    .get();
-  return agg.data().count;
-}
-
 export async function createProposal(
-  uid: string,
+  mailbox: DocumentReference,
   payload: ProposalPayload,
   source: 'web' | 'mcp',
   reason: string,
 ): Promise<string> {
-  const ref = await userRef(adminDb(), uid).collection('proposals').add({
+  const ref = await mailbox.collection('proposals').add({
     payload,
     source,
     reason,
@@ -98,16 +166,4 @@ export async function createProposal(
     createdAt: FieldValue.serverTimestamp(),
   });
   return ref.id;
-}
-
-export async function getHeartbeat(uid: string) {
-  const snap = await userRef(adminDb(), uid).collection('heartbeat').doc('engine').get();
-  if (!snap.exists) return null;
-  const d = snap.data()!;
-  return {
-    lastSeenAt: d.lastSeenAt?.toDate?.().toISOString() ?? null,
-    lastRunAt: d.lastRunAt?.toDate?.().toISOString() ?? null,
-    lastRunStatus: (d.lastRunStatus as string) ?? null,
-    engineVersion: (d.engineVersion as string) ?? null,
-  };
 }

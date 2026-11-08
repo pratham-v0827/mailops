@@ -52,7 +52,7 @@ export const Rule = z
   });
 export type Rule = z.infer<typeof Rule>;
 
-/** Account-wide settings. Safe defaults: automation off, dry run on, global guards on. */
+/** Per-mailbox settings. Safe defaults: automation off, dry run on, global guards on. */
 export const Settings = z.object({
   automationEnabled: z.boolean().default(false),
   dryRun: z.boolean().default(true),
@@ -65,6 +65,19 @@ export const Settings = z.object({
   timezone: z.string().min(1).default('UTC'),
 });
 export type Settings = z.infer<typeof Settings>;
+
+/**
+ * One Gmail address managed by a MailOps user. A user can have several, each with its own rules,
+ * settings and engine. `connected` becomes true once that account's engine checks in (proving
+ * the user controls it).
+ */
+export const NewMailbox = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  displayName: z.string().trim().max(60).default(''),
+});
+export type NewMailbox = z.infer<typeof NewMailbox>;
+
+export const MAX_MAILBOXES_PER_USER = 20;
 
 /** Gmail filter criteria (subset of the Gmail API Filter.criteria). */
 export const FilterCriteria = z
